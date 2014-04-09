@@ -1,4 +1,4 @@
-// A. Sheaff/D. Vaughn LCD RPi 4/10/14
+// A. Sheaff and D. Vaughn LCD RPi 4/9/14
 // Allow access to LCD on the RPi
 // Add a varible and then is discarded after init
 #include <linux/module.h>
@@ -19,10 +19,12 @@
 #include <linux/cdev.h>
 #include <linux/slab.h>
 #include <asm/gpio.h>
+#include <linux/delay.h>
+
 //#include "gpiolcd.h"
 
 
-#define LCD_MOD_AUTH "DVaughn and Scheaf"
+#define LCD_MOD_AUTH "D Vaughn and Scheaf"
 #define LCD_MOD_DESCR "GPIO LCD Driver"
 #define LCD_MOD_SDEV "GPIO LCD RPi"
 
@@ -53,6 +55,13 @@ static tPinSet pins[] = {
         {DB7, "RPI_DB7", -1},
 };
 
+static spinlock_t my_lock;
+
+#define GPIO_IOCTL_MAG 'k'
+
+//in: pin to read       //out: value                    //the value read on the pin
+#define LCD_READ                        _IOWR(GPIO_IOCTL_MAG, 0x90, int)
+#define LCD_WRITE                       _IOW(GPIO_IOCTL_MAG, 0x91, int)
 #define NUM_PINS (sizeof(pins)/sizeof(tPinSet))
 // Macros for setting control lines
 #define RS_LOW  gpio_set_value(RS, 0);
@@ -61,7 +70,7 @@ static tPinSet pins[] = {
 #define E_HIGH  gpio_set_value(E, 1);
 
 
-static long lcd_ioctl(struct inode *inode, struct file * flip, unsigned int cmd, unsigned long arg);
+static long lcd_ioctl(struct file * flip, unsigned int cmd, unsigned long arg);
 static int lcd_open(struct inode *inode, struct file *filp);
 static int lcd_release(struct inode *inode, struct file *filp);
 static char *lcd_devnode(struct device *dev, umode_t *mode);
@@ -70,13 +79,15 @@ static void awaken(unsigned int val);
 static void PutData(char c);
 static ssize_t lcd_write(struct file *file, const char *buf, size_t count, loff_t * ppos);
 static void PinReturn(void);
+static void PutCom(char c);
+
 
 static const struct file_operations lcd_fops = {
-        .owner=THIS_MODULE,
-        .open=lcd_open,
-        .release=lcd_release,
-        .unlocked_ioctl=lcd_ioctl,
-        .write=lcd_write,
+        .owner = THIS_MODULE,
+        .open = lcd_open,
+        .release = lcd_release,
+        .write = lcd_write,
+        .unlocked_ioctl = lcd_ioctl,
 };
 
 struct lcd_data {
@@ -89,14 +100,43 @@ static struct lcd_data lcd = {
         .lcd_class=NULL,
 };
 
-static void lcd_init(void)
-{
-        printk(KERN_NOTICE "LCD initialized\n");
-}
-
 static long lcd_ioctl(struct file * flip, unsigned int cmd, unsigned long arg)
 {
-        return -EINVAL;
+        int data;
+        int lock=1;
+
+        // Read the request data
+        if (copy_from_user(&data, (int *) arg, sizeof(data))) {
+                printk(KERN_INFO "copy_from_user error on LCD ioctl.\n");
+                return -EFAULT;
+        }
+
+        switch (cmd) {
+                case LCD_READ:
+
+                case LCD_WRITE:
+                        lock=spin_trylock(&my_lock);
+                        if(!lock){
+                                printk(KERN_INFO "Unable to obtain lock");
+                                return -EACCES; //Denys permission
+                        }
+                        else{
+                                printk(KERN_INFO "Got the lock!");
+                                //lcd_write(flip, &data, size_t count, loff_t * ppos);
+                                return 0;
+                        }
+        default:
+                printk(KERN_INFO "Invalid ioctl on LCD\n");
+                return -EINVAL;
+        }
+
+        // return the result
+        if (copy_to_user((int *) arg, &data, 4)) {
+                printk(KERN_INFO "copy_to_user error on LCD ioctl\n");
+                return -EFAULT;
+        }
+
+        return 0;
 }
 
 static int lcd_open(struct inode *inode, struct file *filp)
@@ -203,6 +243,7 @@ static ssize_t lcd_write(struct file *file, const char *buf, size_t count, loff_
         char c;
         const char *ptr = buf;
         int i;
+        spin_lock(&my_lock);
         for (i = 0; i < count; i++) {
                 err = copy_from_user(&c, ptr++, 1);
                 if (err != 0)
@@ -210,6 +251,7 @@ static ssize_t lcd_write(struct file *file, const char *buf, size_t count, loff_
               //  put char on screen
                 PutData(c);
         }
+        spin_unlock(&my_lock);
         return count;
 }
 
@@ -224,6 +266,62 @@ static void PinReturn(void)
                 }
         }
 }
+
+// Send command code to the display
+static void PutCom(char c)
+{
+        udelay(1);
+        RS_LOW;
+        udelay(1);
+        awaken((c >> 4) & 0xf);
+        awaken(c & 0xf);
+        udelay(50);
+}
+
+static void lcd_init(void)
+{
+        int i;
+        int got_pins = 1;
+
+        // Request pins
+        for (i = 0; i < NUM_PINS; i++) {
+                pins[i].result = gpio_request(pins[i].pin, pins[i].name);
+                if (pins[i].result != 0)
+                        got_pins = 0;
+        }
+
+        // On any failures, return any pins we managed to get and quit.
+        if (!got_pins) {
+                PinReturn();
+                return;
+        }
+        // Set port direction.  We assume we can do this if we got the pins.
+        // Set initial values to low (0v).
+        for (i = 0; i < NUM_PINS; i++) {
+                gpio_direction_output(pins[i].pin, 0);
+        }
+
+      // Power on and setup the display
+        awaken(0x03);
+        msleep(1);
+        awaken(0x03);
+        msleep(1);
+        awaken(0x03);
+        msleep(1);
+        awaken(0x02);
+        msleep(1);
+
+        PutCom(0x28);
+        udelay(50);
+        PutCom(0x0c);
+        udelay(50);
+        PutCom(0x01);
+        udelay(50);
+        PutCom(0x06);
+        udelay(50);
+
+}
+
 
 module_init(rpigpio_lcd_minit);
 module_exit(rpigpio_lcd_mcleanup);
