@@ -1,6 +1,7 @@
-// A. Sheaff and D. Vaughn LCD RPi 4/9/14
+// A. Sheaff and D. Vaughn LCD RPi 4/10/14
+// ^Credit for framework code
 // Allow access to LCD on the RPi
-// Add a varible and then is discarded after init
+
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -80,6 +81,7 @@ static void PutData(char c);
 static ssize_t lcd_write(struct file *file, const char *buf, size_t count, loff_t * ppos);
 static void PinReturn(void);
 static void PutCom(char c);
+static char lcd_read(void);
 
 
 static const struct file_operations lcd_fops = {
@@ -100,9 +102,10 @@ static struct lcd_data lcd = {
         .lcd_class=NULL,
 };
 
-static long lcd_ioctl(struct file * flip, unsigned int cmd, unsigned long arg)
+static long lcd_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
 {
-        int data;
+        char *data;
+        int count;
         int lock=1;
 
         // Read the request data
@@ -110,10 +113,11 @@ static long lcd_ioctl(struct file * flip, unsigned int cmd, unsigned long arg)
                 printk(KERN_INFO "copy_from_user error on LCD ioctl.\n");
                 return -EFAULT;
         }
-
+        count=(sizeof(*data)/sizeof(char));
         switch (cmd) {
                 case LCD_READ:
-
+                        lcd_read();
+                        return 0;
                 case LCD_WRITE:
                         lock=spin_trylock(&my_lock);
                         if(!lock){
@@ -122,7 +126,7 @@ static long lcd_ioctl(struct file * flip, unsigned int cmd, unsigned long arg)
                         }
                         else{
                                 printk(KERN_INFO "Got the lock!");
-                                //lcd_write(flip, &data, size_t count, loff_t * ppos);
+                                lcd_write(filp, data, count, &filp->f_pos);
                                 return 0;
                         }
         default:
@@ -141,6 +145,14 @@ static long lcd_ioctl(struct file * flip, unsigned int cmd, unsigned long arg)
 
 static int lcd_open(struct inode *inode, struct file *filp)
 {
+        int lock;
+        if(filp->f_mode==FMODE_WRITE){
+                lock=spin_trylock(&my_lock);
+                if(!(lock)){
+                        printk(KERN_INFO "Unable to obtain lock");
+                        return -EACCES; //Deny Permission
+                }
+        }
         printk(KERN_NOTICE "Open Successful\n");
         return 0;
 
@@ -160,18 +172,7 @@ static char *lcd_devnode(struct device *dev, umode_t *mode)
 // Module init
 static int __init rpigpio_lcd_minit(void)
 {
-        // So we're going to need to register a platform device
-        // struct platform_device
-        //bcm_register_device(&bcm2708_gpio_lcd_device);
-        // request GPIO pins connected to LCD
-        // Initialize the LCD
-        // If we use busy flag then we need to have a timeout
-        // Cannot hold processor indef.
-        // Create a character device that is read and writable
         // Read will read the LCD data - not sure where it starts
-        // Write will add characters to screen
-        // ioctl?
-        // open/close
         struct device *dev=NULL;
         int ret=0;
 
@@ -197,6 +198,7 @@ static int __init rpigpio_lcd_minit(void)
         }
         // Call lcd_init
         lcd_init();
+        spin_unlock(&my_lock);
         return ret;
 }
 
@@ -322,6 +324,26 @@ static void lcd_init(void)
 
 }
 
+//read from lcd
+static char lcd_read(void)
+{
+        int result=0;
+        printk(KERN_INFO "Eventually this will read stuff");
+        //Set RS=0 and RW=1
+        //read in current pointer address
+        //set RS=0 RW=0 DB7=1 and send the pointer addr you just got
+        //Set RS=1 RW=1
+        //set db7-4 to be inputs
+        //set E high
+        //read pin values
+        //set E low
+        //make pin values into one integer
+        //Tycast to char and return
+        return (char) result;
+         
+        //DB7-4 output
+
+}
 
 module_init(rpigpio_lcd_minit);
 module_exit(rpigpio_lcd_mcleanup);
