@@ -22,7 +22,6 @@
 #include <asm/gpio.h>
 #include <linux/delay.h>
 
-//#include "gpiolcd.h"
 
 
 #define LCD_MOD_AUTH "D Vaughn and Scheaf"
@@ -30,13 +29,13 @@
 #define LCD_MOD_SDEV "GPIO LCD RPi"
 
 //  Pin ID     Rpi GPIO number     
-#define RS      25           
-#define RW      4            
-#define E       24          
-#define DB4     23          
-#define DB5     17          
-#define DB6     27          
-#define DB7     22          
+#define RS      25
+#define RW      4
+#define E       24
+#define DB4     23
+#define DB5     17
+#define DB6     27
+#define DB7     22
 
 // Structures to hold the pins that were successfully allocated.
 typedef struct PinSet {
@@ -71,14 +70,16 @@ static spinlock_t my_lock;
 #define E_HIGH  gpio_set_value(E, 1);
 
 
-static long lcd_ioctl(struct file * flip, unsigned int cmd, unsigned long arg);
+static long lcd_ioctl(struct file *flip, unsigned int cmd,
+                      unsigned long arg);
 static int lcd_open(struct inode *inode, struct file *filp);
 static int lcd_release(struct inode *inode, struct file *filp);
-static char *lcd_devnode(struct device *dev, umode_t *mode);
+static char *lcd_devnode(struct device *dev, umode_t * mode);
 static void lcd_init(void);
 static void awaken(unsigned int val);
 static void PutData(char c);
-static ssize_t lcd_write(struct file *file, const char *buf, size_t count, loff_t * ppos);
+static ssize_t lcd_write(struct file *file, const char *buf, size_t count,
+                         loff_t * ppos);
 static void PinReturn(void);
 static void PutCom(char c);
 static char lcd_read(void);
@@ -98,37 +99,37 @@ struct lcd_data {
 };
 
 static struct lcd_data lcd = {
-        .lcd_mjr=0,
-        .lcd_class=NULL,
+        .lcd_mjr = 0,
+        .lcd_class = NULL,
 };
 
-static long lcd_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
+static long lcd_ioctl(struct file *filp, unsigned int cmd,
+                      unsigned long arg)
 {
         char *data;
         int count;
-        int lock=1;
+        int lock = 1;
 
         // Read the request data
         if (copy_from_user(&data, (int *) arg, sizeof(data))) {
                 printk(KERN_INFO "copy_from_user error on LCD ioctl.\n");
                 return -EFAULT;
         }
-        count=(sizeof(*data)/sizeof(char));
+        count = (sizeof(*data) / sizeof(char));
         switch (cmd) {
-                case LCD_READ:
-                        lcd_read();
+        case LCD_READ:
+                lcd_read();
+                return 0;
+        case LCD_WRITE:
+                lock = spin_trylock(&my_lock);
+                if (!lock) {
+                        printk(KERN_INFO "Unable to obtain lock");
+                        return -EACCES; //Denys permission
+                } else {
+                        printk(KERN_INFO "Got the lock!");
+                        lcd_write(filp, data, count, &filp->f_pos);
                         return 0;
-                case LCD_WRITE:
-                        lock=spin_trylock(&my_lock);
-                        if(!lock){
-                                printk(KERN_INFO "Unable to obtain lock");
-                                return -EACCES; //Denys permission
-                        }
-                        else{
-                                printk(KERN_INFO "Got the lock!");
-                                lcd_write(filp, data, count, &filp->f_pos);
-                                return 0;
-                        }
+                }
         default:
                 printk(KERN_INFO "Invalid ioctl on LCD\n");
                 return -EINVAL;
@@ -146,9 +147,9 @@ static long lcd_ioctl(struct file * filp, unsigned int cmd, unsigned long arg)
 static int lcd_open(struct inode *inode, struct file *filp)
 {
         int lock;
-        if(filp->f_mode==FMODE_WRITE){
-                lock=spin_trylock(&my_lock);
-                if(!(lock)){
+        if (filp->f_mode == FMODE_WRITE) {
+                lock = spin_trylock(&my_lock);
+                if (!(lock)) {
                         printk(KERN_INFO "Unable to obtain lock");
                         return -EACCES; //Deny Permission
                 }
@@ -163,9 +164,10 @@ static int lcd_release(struct inode *inode, struct file *filp)
         return 0;
 }
 
-static char *lcd_devnode(struct device *dev, umode_t *mode)
+static char *lcd_devnode(struct device *dev, umode_t * mode)
 {
-        if (mode) *mode = 0666;
+        if (mode)
+                *mode = 0666;
         return NULL;
 }
 
@@ -173,27 +175,29 @@ static char *lcd_devnode(struct device *dev, umode_t *mode)
 static int __init rpigpio_lcd_minit(void)
 {
         // Read will read the LCD data - not sure where it starts
-        struct device *dev=NULL;
-        int ret=0;
+        struct device *dev = NULL;
+        int ret = 0;
 
-        printk(KERN_INFO "%s\n",LCD_MOD_DESCR);
-        printk(KERN_INFO "By: %s\n",LCD_MOD_AUTH);
+        printk(KERN_INFO "%s\n", LCD_MOD_DESCR);
+        printk(KERN_INFO "By: %s\n", LCD_MOD_AUTH);
 
-        lcd.lcd_mjr=register_chrdev(0,"gpio_lcd",&lcd_fops);
-        if (lcd.lcd_mjr<0) {
+        lcd.lcd_mjr = register_chrdev(0, "gpio_lcd", &lcd_fops);
+        if (lcd.lcd_mjr < 0) {
                 printk(KERN_NOTICE "Cannot register char device\n");
                 return lcd.lcd_mjr;
         }
-        lcd.lcd_class=class_create(THIS_MODULE, "lcd_class");
+        lcd.lcd_class = class_create(THIS_MODULE, "lcd_class");
         if (IS_ERR(lcd.lcd_class)) {
-                unregister_chrdev(lcd.lcd_mjr,"lcd_gpio");
+                unregister_chrdev(lcd.lcd_mjr, "lcd_gpio");
                 return PTR_ERR(lcd.lcd_class);
         }
-        lcd.lcd_class->devnode=lcd_devnode;
-        dev=device_create(lcd.lcd_class,NULL,MKDEV(lcd.lcd_mjr,0),(void *)&lcd,"lcd");
+        lcd.lcd_class->devnode = lcd_devnode;
+        dev =
+            device_create(lcd.lcd_class, NULL, MKDEV(lcd.lcd_mjr, 0),
+                          (void *) &lcd, "lcd");
         if (IS_ERR(dev)) {
                 class_destroy(lcd.lcd_class);
-                unregister_chrdev(lcd.lcd_mjr,"lcd_gpio");
+                unregister_chrdev(lcd.lcd_mjr, "lcd_gpio");
                 return PTR_ERR(dev);
         }
         // Call lcd_init
@@ -207,9 +211,9 @@ static void __exit rpigpio_lcd_mcleanup(void)
 {
         //bcm_unregister_device(&bcm2708_gpio_lcd_device);
         // Release LCD GPIO pins
-        device_destroy(lcd.lcd_class,MKDEV(lcd.lcd_mjr,0));
+        device_destroy(lcd.lcd_class, MKDEV(lcd.lcd_mjr, 0));
         class_destroy(lcd.lcd_class);
-        unregister_chrdev(lcd.lcd_mjr,"lcd_gpio");
+        unregister_chrdev(lcd.lcd_mjr, "lcd_gpio");
         PinReturn();
         printk(KERN_INFO "Goodbye\n");
         return;
@@ -228,6 +232,7 @@ static void awaken(unsigned int val)
         E_HIGH;
         udelay(1);              // data hold time
 }
+
 static void PutData(char c)
 {
         udelay(1);
@@ -239,7 +244,8 @@ static void PutData(char c)
 }
 
 // Called when writing to the device file.
-static ssize_t lcd_write(struct file *file, const char *buf, size_t count, loff_t * ppos)
+static ssize_t lcd_write(struct file *file, const char *buf, size_t count,
+                         loff_t * ppos)
 {
         int err;
         char c;
@@ -250,7 +256,7 @@ static ssize_t lcd_write(struct file *file, const char *buf, size_t count, loff_
                 err = copy_from_user(&c, ptr++, 1);
                 if (err != 0)
                         return -EFAULT;
-              //  put char on screen
+                //  put char on screen
                 PutData(c);
         }
         spin_unlock(&my_lock);
@@ -303,7 +309,7 @@ static void lcd_init(void)
                 gpio_direction_output(pins[i].pin, 0);
         }
 
-      // Power on and setup the display
+        // Power on and setup the display
         awaken(0x03);
         msleep(1);
         awaken(0x03);
@@ -327,7 +333,7 @@ static void lcd_init(void)
 //read from lcd
 static char lcd_read(void)
 {
-        int result=0;
+        int result = 0;
         printk(KERN_INFO "Eventually this will read stuff");
         //Set RS=0 and RW=1
         //read in current pointer address
@@ -336,11 +342,11 @@ static char lcd_read(void)
         //set db7-4 to be inputs
         //set E high
         //read pin values
-        //set E low
+        //set E low     
         //make pin values into one integer
         //Tycast to char and return
         return (char) result;
-         
+
         //DB7-4 output
 
 }
